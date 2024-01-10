@@ -8,5 +8,5 @@ public class WPILibRepositoriesPlugin implements Plugin<Project> {
     @Override
     public void apply(Project project) {
         project.getExtensions().create("wpilibRepositories", WPILibRepositoriesPluginExtension.class, project);
-    }    
+    }
 }

@@ -8,6 +8,9 @@ import org.gradle.api.artifacts.repositories.MavenArtifactRepository;
 import org.gradle.api.provider.Property;
 import org.gradle.api.publish.PublishingExtension;
 
+import edu.wpi.first.wpilib.repositories.offline.OfflineDownloaderExtension;
+import edu.wpi.first.wpilib.repositories.offline.OfflineDownloaderPlugin;
+
 public class WPILibRepositoriesPluginExtension {
 
     private final Property<String> mavenLocalDevelopmentUrl;
@@ -117,5 +120,10 @@ public class WPILibRepositoriesPluginExtension {
         addLocalReleasePublishing(project);
         addLocalReleaseRepository(project);
         addRemoteReleaseRepository(project);
+    }
+
+    public OfflineDownloaderExtension enableOfflineDownloader(Project project) {
+        project.getPluginManager().apply(OfflineDownloaderPlugin.class);
+        return project.getExtensions().getByType(OfflineDownloaderExtension.class);
     }
 }
