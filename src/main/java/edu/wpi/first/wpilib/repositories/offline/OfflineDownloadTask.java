@@ -57,6 +57,7 @@ public abstract class OfflineDownloadTask extends DefaultTask {
         if (!components.containsKey(componentId)) {
             components.put(componentId, new HashSet<>());
         }
+        components.get(componentId).add(file);
     }
 
     @TaskAction
@@ -79,7 +80,9 @@ public abstract class OfflineDownloadTask extends DefaultTask {
             File directory = getModuleDirectory((ModuleComponentIdentifier) files.getKey(), rootDirectory);
             directory.mkdirs();
             for (File file : files.getValue()) {
-                Files.copy(file.toPath(), new File(directory, file.getName()).toPath(),
+                File output = new File(directory, file.getName());
+                getLogger().info(String.format("Copying %s to %s", file, output));
+                Files.copy(file.toPath(), output.toPath(),
                         StandardCopyOption.REPLACE_EXISTING);
             }
         }
@@ -88,6 +91,7 @@ public abstract class OfflineDownloadTask extends DefaultTask {
     private void getFiles(Collection<Configuration> configurations) {
         for (Configuration configuration : configurations) {
             if (!configuration.isCanBeResolved()) {
+                getLogger().debug(String.format("Configuration %s skipped due to not being resolvable", configuration));
                 continue;
             }
             resolveConfiguration(configuration);
@@ -95,16 +99,21 @@ public abstract class OfflineDownloadTask extends DefaultTask {
     }
 
     private void resolveConfiguration(Configuration configuration) {
+        getLogger().info(String.format("Resolving configuration %s", configuration));
         for (Dependency dependency : configuration.getAllDependencies()) {
             if (!(dependency instanceof ExternalModuleDependency)) {
+                getLogger().debug(String.format("Dependency %s skipped due to not being an ExternalModuleDependency", dependency));
                 continue;
             }
+
+            getLogger().info(String.format("Resolving dependency %s", dependency));
 
             List<Dependency> newDependencies = new ArrayList<>();
 
             Configuration detached = getProject().getConfigurations().detachedConfiguration(dependency);
             // Resolve all primary artifacts
             for (ResolvedArtifact artifact : detached.getResolvedConfiguration().getResolvedArtifacts()) {
+                getLogger().info(String.format("Resolved artifact %s", artifact));
                 artifact.getModuleVersion().getId();
                 if (artifact.getId().getComponentIdentifier() instanceof ModuleComponentIdentifier) {
                     newDependencies.add(getProject().getDependencies()
@@ -130,6 +139,7 @@ public abstract class OfflineDownloadTask extends DefaultTask {
             });
 
             for (ResolvedArtifactResult result : view.getArtifacts()) {
+                getLogger().info(String.format("Resolved artifact %s", result));
                 if (result.getFile().getName().toLowerCase().endsWith(".pom")) {
                     poms.add(result.getFile());
                 }
@@ -147,6 +157,7 @@ public abstract class OfflineDownloadTask extends DefaultTask {
             });
 
             for (ResolvedArtifactResult result : view.getArtifacts()) {
+                getLogger().info(String.format("Resolved artifact %s", result));
                 if (result.getFile().getName().toLowerCase().endsWith(".pom")) {
                     poms.add(result.getFile());
                 }
@@ -164,10 +175,13 @@ public abstract class OfflineDownloadTask extends DefaultTask {
         }
     }
 
-    private void collectAlreadyDetached(Configuration detached, boolean skipMainArtifacts) {
-        // Resolve configuration
+    private void collectAlreadyDetached(Dependency dependency, boolean skipMainArtifacts) {
+        getLogger().info(String.format("Resolving extra dependency %s", dependency));
+        Configuration detached = getProject().getConfigurations().detachedConfiguration(dependency);
+        // // Resolve configuration
         if (!skipMainArtifacts) {
             for (ResolvedArtifact artifact : detached.getResolvedConfiguration().getResolvedArtifacts()) {
+                getLogger().info(String.format("Resolved extra artifact %s", artifact));
                 if (artifact.getFile().getName().toLowerCase().endsWith(".pom")) {
                     poms.add(artifact.getFile());
                 }
@@ -175,25 +189,8 @@ public abstract class OfflineDownloadTask extends DefaultTask {
             }
         }
 
-        // Resolve normal artifacts
+        // Resolve poms and metadata
         ArtifactView view = detached.getIncoming().artifactView(viewConfig -> {
-            viewConfig.withVariantReselection();
-            viewConfig.setLenient(true);
-            viewConfig.attributes(attributes -> {
-                attributes.attribute(DocsType.DOCS_TYPE_ATTRIBUTE,
-                        getProject().getObjects().named(DocsType.class, "all-files"));
-            });
-        });
-
-        for (ResolvedArtifactResult result : view.getArtifacts()) {
-            if (result.getFile().getName().toLowerCase().endsWith(".pom")) {
-                poms.add(result.getFile());
-            }
-            addToFileMap(result.getId().getComponentIdentifier(), result.getFile());
-        }
-
-        // Resolve platform bom files
-        view = detached.getIncoming().artifactView(viewConfig -> {
             viewConfig.withVariantReselection();
             viewConfig.setLenient(true);
             viewConfig.attributes(attributes -> {
@@ -202,15 +199,43 @@ public abstract class OfflineDownloadTask extends DefaultTask {
             });
         });
 
+        boolean found = false;
         for (ResolvedArtifactResult result : view.getArtifacts()) {
+            getLogger().info(String.format("Resolved extra artifact %s", result));
+            found = true;
             if (result.getFile().getName().toLowerCase().endsWith(".pom")) {
                 poms.add(result.getFile());
             }
             addToFileMap(result.getId().getComponentIdentifier(), result.getFile());
         }
+
+        if (!found) {
+            getLogger().info("No extra artifacts resolved. Attempting configuration hack");
+            detached = getProject().getConfigurations().detachedConfiguration(dependency);
+            detached.getAttributes().attribute(DocsType.DOCS_TYPE_ATTRIBUTE,
+                        getProject().getObjects().named(DocsType.class, "platform-metadata"));
+
+            view = detached.getIncoming().artifactView(viewConfig -> {
+                        viewConfig.withVariantReselection();
+                        viewConfig.setLenient(true);
+                        viewConfig.attributes(attributes -> {
+                            attributes.attribute(DocsType.DOCS_TYPE_ATTRIBUTE,
+                                    getProject().getObjects().named(DocsType.class, "platform-metadata"));
+                        });
+                    });
+
+                    for (ResolvedArtifactResult result : view.getArtifacts()) {
+                        getLogger().info(String.format("Resolved extra artifact %s", result));
+                        if (result.getFile().getName().toLowerCase().endsWith(".pom")) {
+                            poms.add(result.getFile());
+                        }
+                        addToFileMap(result.getId().getComponentIdentifier(), result.getFile());
+                    }
+        }
     }
 
     private void collectPoms(File pom) {
+        getLogger().info(String.format("Resolving extra pom %s", pom));
         try (FileReader reader = new FileReader(pom)) {
             Model pomModel = pomReader.read(reader);
             Parent parent = pomModel.getParent();
@@ -218,8 +243,7 @@ public abstract class OfflineDownloadTask extends DefaultTask {
                 // Resolve the parent
                 Dependency dep = getProject().getDependencies()
                         .create(parent.getGroupId() + ":" + parent.getArtifactId() + ":" + parent.getVersion());
-                Configuration detached = getProject().getConfigurations().detachedConfiguration(dep);
-                collectAlreadyDetached(detached, false);
+                collectAlreadyDetached(dep, false);
             }
 
             DependencyManagement management = pomModel.getDependencyManagement();
@@ -233,8 +257,7 @@ public abstract class OfflineDownloadTask extends DefaultTask {
                             + dependency.getVersion();
                     Dependency dep = getProject().getDependencies()
                             .create(id);
-                    Configuration detached = getProject().getConfigurations().detachedConfiguration(dep);
-                    collectAlreadyDetached(detached, true);
+                    collectAlreadyDetached(dep, true);
                 }
             }
         } catch (Exception e) {
